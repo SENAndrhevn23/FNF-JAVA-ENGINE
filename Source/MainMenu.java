@@ -8,16 +8,10 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 
 public class MainMenu extends JPanel implements KeyListener, Runnable {
-
     private JFrame frame;
-    private boolean running = true;
-
     private String state = "MAIN";
     private int selected = 0;
 
-    // =========================
-    // GAME SETTINGS
-    // =========================
     public static boolean botPlay = false;
     public static boolean numberPopups = true;
     public static boolean commaOnThirdDigits = true;
@@ -27,79 +21,46 @@ public class MainMenu extends JPanel implements KeyListener, Runnable {
     public static int extraKeysCount = 4;
     public static boolean infiniteKeys = false;
 
-    // =========================
-    // OPTIMIZATIONS (USED BY PLAYSTATE)
-    // =========================
-    public static boolean noteSkipping = true;
-    public static boolean notePooling = true;
-    public static boolean disableComboPopups = false;
-    public static boolean disableRgbNoteColors = false;
-    public static boolean disableGarbageCollectorLag = false;
-    public static boolean disablePreHitEvents = false;
-    public static boolean bulkSkipping = true;
-    public static boolean showCounters = true;
-    public static boolean disableStrumAnimations = false;
-    public static boolean showNotes = true;
-    public static int maxShownNotes = 0;
-    public static boolean removeOverlappedSystem = true;
-    public static boolean disableGpuCatching = false;
-    public static boolean disableMultithreadingCatching = false;
-    public static boolean disableVsync = false;
-    public static double noteDensityMs = 1.0;
-
-    // =========================
-    // MENUS
-    // =========================
-    private final String[] mainMenu = {"Freeplay", "Options"};
-    private final String[] optionsMenu = {"Gameplay", "Optimizations", "Controls", "Extra Keys"};
-
-    private final String[] gameplayMenu = {"BotPlay"};
-
-    private final String[] optimizationsMenu = {
-            "Note Pooling",
-            "Note Skipping",
-            "Disable Combo Popups",
-            "Disable RGB Notes",
-            "Disable GC Lag",
-            "Disable PreHit Events",
-            "Bulk Skipping",
-            "Show Counters",
-            "Disable Strum Animations",
-            "Show Notes",
-            "Remove Overlap System",
-            "Disable GPU Catching",
-            "Disable Multithread Catching",
-            "Disable VSync",
-            "Note Density"
+    private static final int[] KEY_PRESETS = {
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 40, 50, 60, 70, 80, 90, 100, 105, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 9999
     };
+    private static int extraKeysPresetIndex = 3; // default = 4
 
-    private final String[] extraKeysMenu = {"Key Count", "Back"};
-
-    // =========================
-    // INPUT BINDS
-    // =========================
     private final int[] bindCodes = {
-            KeyEvent.VK_D, KeyEvent.VK_F, KeyEvent.VK_J, KeyEvent.VK_K
+            KeyEvent.VK_D,
+            KeyEvent.VK_F,
+            KeyEvent.VK_J,
+            KeyEvent.VK_K
     };
     private final String[] bindLabels = {"Left", "Down", "Up", "Right"};
 
-    // =========================
-    // FPS
-    // =========================
+    private final String[] mainMenu = {"Freeplay", "Options"};
+    private final String[] optionsMenu = {"Gameplay", "Optimizations", "Controls", "Extra Keys"};
+    private final String[] gameplayMenu = {"BotPlay"};
+    private final String[] optimizationsMenu = {
+            "Enable Number Popups",
+            "Enable Comma On Third Digits",
+            "Game Rendering (FFMPEG)"
+    };
+    private final String[] extraKeysMenu = {
+            "Key Count",
+            "Back"
+    };
+
     private int fps = 0;
     private int frames = 0;
     private long lastTime = System.nanoTime();
-
-    // =========================
-    // GRAPHICS
-    // =========================
-    private Font fnfFont = new Font("Arial", Font.BOLD, 48);
-    private Font hudFont = new Font("Arial", Font.PLAIN, 18);
-
-    private BufferedImage bgMain, bgOptions, imgFreeplay, imgOptions;
+    private Font fnfFont;
+    private Font hudFont;
+    private BufferedImage bgMain;
+    private BufferedImage bgOptions;
+    private BufferedImage imgFreeplay;
+    private BufferedImage imgOptions;
 
     public MainMenu() {
+        loadFont();
         loadImages();
+        applyKeyPreset(extraKeysPresetIndex);
 
         setPreferredSize(new Dimension(1280, 720));
         setFocusable(true);
@@ -107,25 +68,63 @@ public class MainMenu extends JPanel implements KeyListener, Runnable {
 
         frame = new JFrame("Main Menu");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setResizable(false);
         frame.add(this);
         frame.pack();
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
-
         requestFocusInWindow();
+
         new Thread(this).start();
+    }
+
+    private void applyKeyPreset(int presetIndex) {
+        if (presetIndex < 0) presetIndex = KEY_PRESETS.length;
+        if (presetIndex > KEY_PRESETS.length) presetIndex = 0;
+
+        extraKeysPresetIndex = presetIndex;
+
+        if (presetIndex == KEY_PRESETS.length) {
+            infiniteKeys = true;
+            extraKeysCount = KEY_PRESETS[KEY_PRESETS.length - 1];
+        } else {
+            infiniteKeys = false;
+            extraKeysCount = KEY_PRESETS[presetIndex];
+        }
+    }
+
+    private void cycleExtraKeys(int delta) {
+        int current = infiniteKeys ? KEY_PRESETS.length : extraKeysPresetIndex;
+        current += delta;
+
+        if (current < 0) current = KEY_PRESETS.length;
+        if (current > KEY_PRESETS.length) current = 0;
+
+        applyKeyPreset(current);
+    }
+
+    private void loadFont() {
+        try {
+            Font base = Font.createFont(Font.TRUETYPE_FONT,
+                    new File("/home/andre/Music/FNF-JAVA-ENGINE/Assets/Fonts/FridayFunkin-Regular.ttf"));
+            fnfFont = base.deriveFont(48f);
+        } catch (Exception e) {
+            fnfFont = new Font("Arial", Font.BOLD, 48);
+        }
+        hudFont = new Font("Arial", Font.PLAIN, 18);
     }
 
     private BufferedImage loadImg(String path) {
         try {
             return ImageIO.read(new File(path));
         } catch (Exception e) {
+            System.out.println("Failed loading: " + path);
             return null;
         }
     }
 
     private void loadImages() {
-        String base = "Assets/Images/";
+        String base = "/home/andre/Music/FNF-JAVA-ENGINE/Assets/Images/";
         bgMain = loadImg(base + "menuBG.png");
         bgOptions = loadImg(base + "menuBGMagenta.png");
         imgFreeplay = loadImg(base + "Freeplay.png");
@@ -134,9 +133,8 @@ public class MainMenu extends JPanel implements KeyListener, Runnable {
 
     @Override
     public void run() {
-        while (running) {
+        while (true) {
             repaint();
-
             frames++;
             long now = System.nanoTime();
             if (now - lastTime >= 1_000_000_000L) {
@@ -144,10 +142,10 @@ public class MainMenu extends JPanel implements KeyListener, Runnable {
                 frames = 0;
                 lastTime = now;
             }
-
             try {
-                Thread.sleep(1000 / Math.max(1, targetFPS));
-            } catch (Exception ignored) {}
+                Thread.sleep(16);
+            } catch (Exception ignored) {
+            }
         }
     }
 
@@ -155,13 +153,15 @@ public class MainMenu extends JPanel implements KeyListener, Runnable {
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g;
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
 
         if (state.equals("MAIN")) {
             drawBG(g2, bgMain);
-            drawMenu(g2, mainMenu);
+            drawMainMenu(g2);
         } else {
             drawBG(g2, bgOptions);
-            drawMenu(g2, getMenu());
+            drawOptionsMenu(g2);
         }
 
         g2.setFont(hudFont);
@@ -170,66 +170,82 @@ public class MainMenu extends JPanel implements KeyListener, Runnable {
     }
 
     private void drawBG(Graphics2D g2, BufferedImage img) {
-        if (img != null) g2.drawImage(img, 0, 0, 1280, 720, null);
-        else {
+        if (img != null) {
+            g2.drawImage(img, 0, 0, 1280, 720, null);
+        } else {
             g2.setColor(Color.BLACK);
             g2.fillRect(0, 0, 1280, 720);
         }
     }
 
-    private void drawMenu(Graphics2D g2, String[] menu) {
-        if (menu == null) return;
+    private void drawMainMenu(Graphics2D g2) {
+        int w = 420;
+        int h = 140;
+        int x = (1280 / 2) - (w / 2);
+        int startY = 260;
+        int spacing = 170;
 
-        g2.setFont(fnfFont);
+        int freeY = startY;
+        int optY = startY + spacing;
 
-        for (int i = 0; i < menu.length; i++) {
-            g2.setColor(i == selected ? Color.YELLOW : Color.WHITE);
+        drawImage(g2, imgFreeplay, x, freeY, w, h);
+        drawImage(g2, imgOptions, x, optY, w, h);
 
-            String text = menu[i];
+        if (selected == 0) drawSelectBox(g2, x, freeY, w, h);
+        if (selected == 1) drawSelectBox(g2, x, optY, w, h);
+    }
 
-            if (state.equals("GAMEPLAY")) {
-                text = "BotPlay: " + onOff(botPlay);
-            }
-
-            if (state.equals("OPTIMIZATIONS")) {
-                text += ": " + getOptimizationValue(i);
-            }
-
-            if (state.equals("EXTRA_KEYS") && i == 0) {
-                text = "Key Count: " + (infiniteKeys ? "INF" : extraKeysCount);
-            }
-
-            g2.drawString(text, 280, 240 + (i * 60));
+    private void drawImage(Graphics2D g2, BufferedImage img, int x, int y, int w, int h) {
+        if (img != null) {
+            g2.drawImage(img, x, y, w, h, null);
+        } else {
+            g2.setColor(Color.DARK_GRAY);
+            g2.fillRoundRect(x, y, w, h, 20, 20);
         }
     }
 
-    private String getOptimizationValue(int i) {
-        return switch (i) {
-            case 0 -> onOff(notePooling);
-            case 1 -> onOff(noteSkipping);
-            case 2 -> onOff(disableComboPopups);
-            case 3 -> onOff(disableRgbNoteColors);
-            case 4 -> onOff(disableGarbageCollectorLag);
-            case 5 -> onOff(disablePreHitEvents);
-            case 6 -> onOff(bulkSkipping);
-            case 7 -> onOff(showCounters);
-            case 8 -> onOff(disableStrumAnimations);
-            case 9 -> onOff(showNotes);
-            case 10 -> onOff(removeOverlappedSystem);
-            case 11 -> onOff(disableGpuCatching);
-            case 12 -> onOff(disableMultithreadingCatching);
-            case 13 -> onOff(disableVsync);
-            case 14 -> String.format("%.2f", noteDensityMs);
-            default -> "";
-        };
+    private void drawSelectBox(Graphics2D g2, int x, int y, int w, int h) {
+        g2.setColor(new Color(0, 255, 0));
+        g2.setStroke(new BasicStroke(5f));
+        g2.drawRect(x - 8, y - 8, w + 16, h + 16);
     }
 
-    private String onOff(boolean b) {
-        return b ? "ON" : "OFF";
+    private void drawOptionsMenu(Graphics2D g2) {
+        String[] menu = getMenu();
+        if (menu == null) return;
+
+        g2.setFont(fnfFont);
+        for (int i = 0; i < menu.length; i++) {
+            g2.setColor(i == selected ? Color.YELLOW : Color.WHITE);
+            String text = menu[i];
+
+            if (state.equals("GAMEPLAY")) {
+                text = "BotPlay: " + (botPlay ? "ON" : "OFF");
+            } else if (state.equals("OPTIMIZATIONS")) {
+                if (i == 0) {
+                    text = "Enable Number Popups: " + (numberPopups ? "ON" : "OFF");
+                } else if (i == 1) {
+                    text = "Enable Comma On Third Digits: " + (commaOnThirdDigits ? "ON" : "OFF");
+                } else if (i == 2) {
+                    text = "Game Rendering (FFMPEG): " + (renderMode ? "ON" : "OFF");
+                }
+            } else if (state.equals("CONTROLS")) {
+                text = bindLabels[i] + ": " + KeyEvent.getKeyText(bindCodes[i]);
+            } else if (state.equals("EXTRA_KEYS")) {
+                if (i == 0) {
+                    text = "Key Count: " + (infiniteKeys ? "INF" : String.valueOf(extraKeysCount));
+                } else if (i == 1) {
+                    text = "Back";
+                }
+            }
+
+            g2.drawString(text, 320, 260 + (i * 80));
+        }
     }
 
     private String[] getMenu() {
         return switch (state) {
+            case "MAIN" -> mainMenu;
             case "OPTIONS" -> optionsMenu;
             case "GAMEPLAY" -> gameplayMenu;
             case "OPTIMIZATIONS" -> optimizationsMenu;
@@ -242,92 +258,99 @@ public class MainMenu extends JPanel implements KeyListener, Runnable {
     @Override
     public void keyPressed(KeyEvent e) {
         int key = e.getKeyCode();
-        String[] menu = state.equals("MAIN") ? mainMenu : getMenu();
+        String[] menu = getMenu();
 
         if (key == KeyEvent.VK_DOWN) selected++;
         if (key == KeyEvent.VK_UP) selected--;
 
-        if (menu != null) {
+        if (state.equals("MAIN")) {
+            if (selected < 0) selected = mainMenu.length - 1;
+            if (selected >= mainMenu.length) selected = 0;
+        } else if (menu != null) {
             if (selected < 0) selected = menu.length - 1;
             if (selected >= menu.length) selected = 0;
         }
 
-        // ENTER
+        if (state.equals("EXTRA_KEYS")) {
+            if (selected == 0) {
+                if (key == KeyEvent.VK_LEFT) cycleExtraKeys(-1);
+                if (key == KeyEvent.VK_RIGHT) cycleExtraKeys(1);
+                if (key == KeyEvent.VK_ENTER) cycleExtraKeys(1);
+            }
+
+            if (key == KeyEvent.VK_ENTER && selected == 1) {
+                state = "OPTIONS";
+                selected = 0;
+            }
+
+            if (key == KeyEvent.VK_BACK_SPACE) {
+                state = "OPTIONS";
+                selected = 0;
+            }
+
+            repaint();
+            return;
+        }
+
         if (key == KeyEvent.VK_ENTER) {
-            handleEnter();
+            switch (state) {
+                case "MAIN" -> {
+                    if (selected == 0) {
+                        frame.dispose();
+                        new FreeplayState();
+                    } else {
+                        state = "OPTIONS";
+                        selected = 0;
+                    }
+                }
+                case "OPTIONS" -> {
+                    if (selected == 0) {
+                        state = "GAMEPLAY";
+                        selected = 0;
+                    } else if (selected == 1) {
+                        state = "OPTIMIZATIONS";
+                        selected = 0;
+                    } else if (selected == 2) {
+                        state = "CONTROLS";
+                        selected = 0;
+                    } else if (selected == 3) {
+                        state = "EXTRA_KEYS";
+                        selected = 0;
+                    }
+                }
+                case "GAMEPLAY" -> {
+                    if (selected == 0) {
+                        botPlay = !botPlay;
+                    }
+                }
+                case "OPTIMIZATIONS" -> {
+                    if (selected == 0) {
+                        numberPopups = !numberPopups;
+                    } else if (selected == 1) {
+                        commaOnThirdDigits = !commaOnThirdDigits;
+                    } else if (selected == 2) {
+                        renderMode = !renderMode;
+                    }
+                }
+                case "CONTROLS" -> {
+                    if (selected >= 0 && selected < bindCodes.length) {
+                        bindCodes[selected] =
+                                (bindCodes[selected] == KeyEvent.VK_SPACE)
+                                        ? KeyEvent.VK_D
+                                        : KeyEvent.VK_SPACE;
+                    }
+                }
+            }
         }
 
-        // BACK
         if (key == KeyEvent.VK_BACK_SPACE) {
-            handleBack();
-        }
-
-        // LEFT/RIGHT for density
-        if (state.equals("OPTIMIZATIONS") && selected == 14) {
-            if (key == KeyEvent.VK_LEFT) {
-                noteDensityMs = Math.max(0.1, noteDensityMs - 0.1);
-            }
-            if (key == KeyEvent.VK_RIGHT) {
-                noteDensityMs = Math.min(5.0, noteDensityMs + 0.1);
-            }
+            if (state.equals("OPTIONS")) state = "MAIN";
+            else if (state.equals("GAMEPLAY") || state.equals("OPTIMIZATIONS")
+                    || state.equals("CONTROLS") || state.equals("EXTRA_KEYS")) state = "OPTIONS";
+            selected = 0;
         }
 
         repaint();
-    }
-
-    private void handleEnter() {
-        switch (state) {
-            case "MAIN" -> {
-                if (selected == 0) {
-                    frame.dispose();
-                    new FreeplayState();
-                } else {
-                    state = "OPTIONS";
-                    selected = 0;
-                }
-            }
-            case "OPTIONS" -> {
-                state = switch (selected) {
-                    case 0 -> "GAMEPLAY";
-                    case 1 -> "OPTIMIZATIONS";
-                    case 2 -> "CONTROLS";
-                    case 3 -> "EXTRA_KEYS";
-                    default -> state;
-                };
-                selected = 0;
-            }
-            case "GAMEPLAY" -> botPlay = !botPlay;
-
-            case "OPTIMIZATIONS" -> toggleOptimization(selected);
-        }
-    }
-
-    private void toggleOptimization(int i) {
-        switch (i) {
-            case 0 -> notePooling = !notePooling;
-            case 1 -> noteSkipping = !noteSkipping;
-            case 2 -> disableComboPopups = !disableComboPopups;
-            case 3 -> disableRgbNoteColors = !disableRgbNoteColors;
-            case 4 -> disableGarbageCollectorLag = !disableGarbageCollectorLag;
-            case 5 -> disablePreHitEvents = !disablePreHitEvents;
-            case 6 -> bulkSkipping = !bulkSkipping;
-            case 7 -> showCounters = !showCounters;
-            case 8 -> disableStrumAnimations = !disableStrumAnimations;
-            case 9 -> showNotes = !showNotes;
-            case 10 -> removeOverlappedSystem = !removeOverlappedSystem;
-            case 11 -> disableGpuCatching = !disableGpuCatching;
-            case 12 -> disableMultithreadingCatching = !disableMultithreadingCatching;
-            case 13 -> disableVsync = !disableVsync;
-        }
-    }
-
-    private void handleBack() {
-        state = switch (state) {
-            case "MAIN" -> "MAIN";
-            case "OPTIONS" -> "MAIN";
-            default -> "OPTIONS";
-        };
-        selected = 0;
     }
 
     @Override public void keyReleased(KeyEvent e) {}
