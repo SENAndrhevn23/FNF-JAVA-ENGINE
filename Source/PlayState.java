@@ -69,7 +69,7 @@ public class PlayState extends JPanel implements KeyListener {
     private long maxMemoryMB = 0;
 
     private final double baseScrollSpeed = 0.45;
-    private double songSpeed = 10;
+    private double songSpeed = 2.5;
     private double renderSpeed = 1.0;
 
     private final int hitWindowMs = 150;
@@ -504,7 +504,7 @@ public class PlayState extends JPanel implements KeyListener {
     }
 
     private void resetChart() {
-        songSpeed = 10;
+        songSpeed = 2.5;
         renderSpeed = 1.0;
         songTimeMs = 0.0;
         lastUpdateNano = System.nanoTime();
