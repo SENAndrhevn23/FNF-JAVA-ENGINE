@@ -86,3 +86,10 @@ Feel free to fork this project and experiment with it.
 If you run into issues, you can open an issue and I’ll try to help when I can.
 
 Happy modding! 🎶
+
+
+## VS CODE
+
+if you got vs code. look in playstate and search Andre and you should see the paths
+and if you got the paths to your own path. your ready to use it
+thanks :p
