@@ -5,7 +5,6 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
-import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 import java.io.*;
@@ -23,7 +22,9 @@ public class PlayState extends JPanel implements KeyListener {
     private static final int HIT_Y = 100;
     private static final int FINAL_RENDER_PADDING_MS = 5000;
 
-    private static final int MAX_BUFFERED_NOTES = 250_000;
+    // For very large charts, keep the loaded note data, but do not keep drawing old notes.
+    // The renderer only touches notes in the current visible window.
+    private static final int MAX_BUFFERED_NOTES = 1_000_000;
 
     private final JFrame frame;
     private final String songName;
@@ -43,6 +44,10 @@ public class PlayState extends JPanel implements KeyListener {
     private BufferedImage leftComing, downComing, upComing, rightComing;
     private BufferedImage leftPress, downPress, upPress, rightPress;
     private BufferedImage leftGlow, downGlow, upGlow, rightGlow;
+    private BufferedImage[] staticImgs;
+    private BufferedImage[] comingImgs;
+    private BufferedImage[] pressImgs;
+    private BufferedImage[] glowImgs;
     private final BufferedImage[] numberDigits = new BufferedImage[10];
     private BufferedImage numberComma;
 
@@ -67,6 +72,7 @@ public class PlayState extends JPanel implements KeyListener {
 
     private long usedMemoryMB = 0;
     private long maxMemoryMB = 0;
+    private long lastMemorySampleMs = 0;
 
     private final double baseScrollSpeed = 0.45;
     private double songSpeed = 2.5;
@@ -119,9 +125,8 @@ public class PlayState extends JPanel implements KeyListener {
         private double[] times = new double[4096];
         private float[] sustains = new float[4096];
         private int size = 0;
-        private int hitCursor = 0;
-        private int npsStart = 0;
-        private int npsEnd = 0;
+        private int head = 0;       // first live note
+        private int hitCursor = 0;  // next note to process
 
         synchronized void add(double time, float sustain) {
             if (size >= times.length) {
@@ -138,6 +143,10 @@ public class PlayState extends JPanel implements KeyListener {
             return size;
         }
 
+        synchronized int liveStart() {
+            return head;
+        }
+
         synchronized int hitCursor() {
             return hitCursor;
         }
@@ -146,28 +155,12 @@ public class PlayState extends JPanel implements KeyListener {
             hitCursor = value;
         }
 
-        synchronized int npsStart() {
-            return npsStart;
-        }
-
-        synchronized void setNpsStart(int value) {
-            npsStart = value;
-        }
-
-        synchronized int npsEnd() {
-            return npsEnd;
-        }
-
-        synchronized void setNpsEnd(int value) {
-            npsEnd = value;
-        }
-
         synchronized double timeAt(int index) {
             return times[index];
         }
 
         synchronized int lowerBound(double value) {
-            int lo = 0, hi = size;
+            int lo = head, hi = size;
             while (lo < hi) {
                 int mid = (lo + hi) >>> 1;
                 if (times[mid] < value) lo = mid + 1;
@@ -177,7 +170,7 @@ public class PlayState extends JPanel implements KeyListener {
         }
 
         synchronized int upperBound(double value) {
-            int lo = 0, hi = size;
+            int lo = head, hi = size;
             while (lo < hi) {
                 int mid = (lo + hi) >>> 1;
                 if (times[mid] <= value) lo = mid + 1;
@@ -193,30 +186,16 @@ public class PlayState extends JPanel implements KeyListener {
         }
 
         synchronized int compactBefore(double minTime) {
-            int removeUntil = 0;
-            while (removeUntil < size && times[removeUntil] < minTime) {
-                removeUntil++;
+            while (head < size && times[head] < minTime) {
+                head++;
             }
+            if (hitCursor < head) hitCursor = head;
+            return head;
+        }
 
-            if (removeUntil <= 0) return 0;
-
-            if (removeUntil >= size) {
-                int removed = size;
-                size = 0;
-                hitCursor = 0;
-                npsStart = 0;
-                npsEnd = 0;
-                return removed;
-            }
-
-            int remaining = size - removeUntil;
-            System.arraycopy(times, removeUntil, times, 0, remaining);
-            System.arraycopy(sustains, removeUntil, sustains, 0, remaining);
-            size = remaining;
-            hitCursor = Math.max(0, hitCursor - removeUntil);
-            npsStart = Math.max(0, npsStart - removeUntil);
-            npsEnd = Math.max(0, npsEnd - removeUntil);
-            return removeUntil;
+        synchronized int visibleStart(double minTime) {
+            int s = lowerBound(minTime);
+            return Math.max(s, head);
         }
     }
 
@@ -263,8 +242,8 @@ public class PlayState extends JPanel implements KeyListener {
                 offscreenImage = new BufferedImage(SCREEN_W, SCREEN_H, BufferedImage.TYPE_INT_RGB);
                 offscreenGraphics = offscreenImage.createGraphics();
                 offscreenGraphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                offscreenGraphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-                offscreenGraphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+                offscreenGraphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+                offscreenGraphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
                 ffmpegRgbData = new byte[SCREEN_W * SCREEN_H * 3];
                 startFFmpegRecording();
             } catch (Exception e) {
@@ -300,9 +279,7 @@ public class PlayState extends JPanel implements KeyListener {
 
     private int[] buildLaneKeys(int count) {
         int[] keys = new int[count];
-        for (int i = 0; i < count; i++) {
-            keys[i] = KEY_POOL[i % KEY_POOL.length];
-        }
+        for (int i = 0; i < count; i++) keys[i] = KEY_POOL[i % KEY_POOL.length];
         return keys;
     }
 
@@ -450,9 +427,7 @@ public class PlayState extends JPanel implements KeyListener {
                 videoOutput.close();
                 videoOutput = null;
             }
-            if (ffmpegProcess != null) {
-                ffmpegProcess.waitFor();
-            }
+            if (ffmpegProcess != null) ffmpegProcess.waitFor();
         } catch (Exception ignored) {
         }
         running = false;
@@ -460,9 +435,7 @@ public class PlayState extends JPanel implements KeyListener {
         System.out.println("[RENDER] FINISHED! Video saved to Video/" + songName + ".mp4");
         try {
             File videoFolder = new File("Video");
-            if (Desktop.isDesktopSupported()) {
-                Desktop.getDesktop().open(videoFolder);
-            }
+            if (Desktop.isDesktopSupported()) Desktop.getDesktop().open(videoFolder);
         } catch (Exception ignored) {
         }
         SwingUtilities.invokeLater(MainMenu::new);
@@ -520,14 +493,8 @@ public class PlayState extends JPanel implements KeyListener {
 
         synchronized (laneLock) {
             for (int i = 0; i < laneCount; i++) {
-                playerLanes[i].compactBefore(Double.POSITIVE_INFINITY);
-                opponentLanes[i].compactBefore(Double.POSITIVE_INFINITY);
                 playerLanes[i].setHitCursor(0);
                 opponentLanes[i].setHitCursor(0);
-                playerLanes[i].setNpsStart(0);
-                playerLanes[i].setNpsEnd(0);
-                opponentLanes[i].setNpsStart(0);
-                opponentLanes[i].setNpsEnd(0);
                 playerGlow[i] = 0;
                 opponentGlow[i] = 0;
                 playerHeld[i] = false;
@@ -553,9 +520,12 @@ public class PlayState extends JPanel implements KeyListener {
             lastFpsTick = now;
         }
 
-        Runtime rt = Runtime.getRuntime();
-        usedMemoryMB = (rt.totalMemory() - rt.freeMemory()) / (1024L * 1024L);
-        maxMemoryMB = rt.maxMemory() / (1024L * 1024L);
+        if (now - lastMemorySampleMs >= 1000) {
+            lastMemorySampleMs = now;
+            Runtime rt = Runtime.getRuntime();
+            usedMemoryMB = (rt.totalMemory() - rt.freeMemory()) / (1024L * 1024L);
+            maxMemoryMB = rt.maxMemory() / (1024L * 1024L);
+        }
 
         if (popupFrames > 0) popupFrames--;
         for (int i = 0; i < laneCount; i++) {
@@ -781,9 +751,7 @@ public class PlayState extends JPanel implements KeyListener {
         }
 
         private int peek() throws IOException {
-            if (peeked == Integer.MIN_VALUE) {
-                peeked = read();
-            }
+            if (peeked == Integer.MIN_VALUE) peeked = read();
             return peeked;
         }
 
@@ -797,17 +765,13 @@ public class PlayState extends JPanel implements KeyListener {
 
         private void expect(char expected) throws IOException {
             int c = read();
-            if (c != expected) {
-                throw new IOException("Expected '" + expected + "' but found '" + (char) c + "'");
-            }
+            if (c != expected) throw new IOException("Expected '" + expected + "' but found '" + (char) c + "'");
         }
 
         private void readLiteral(String literal) throws IOException {
             for (int i = 0; i < literal.length(); i++) {
                 int c = read();
-                if (c != literal.charAt(i)) {
-                    throw new IOException("Expected literal: " + literal);
-                }
+                if (c != literal.charAt(i)) throw new IOException("Expected literal: " + literal);
             }
         }
 
@@ -819,7 +783,6 @@ public class PlayState extends JPanel implements KeyListener {
                 if (c < 0) throw new IOException("Unexpected EOF inside string");
                 char ch = (char) c;
                 if (ch == '"') break;
-
                 if (ch == '\\') {
                     int esc = read();
                     if (esc < 0) throw new IOException("Unexpected EOF in escape sequence");
@@ -1009,9 +972,8 @@ public class PlayState extends JPanel implements KeyListener {
                 String key = readString();
                 skipWs();
 
-                if (peek() == ':') {
-                    read();
-                } else {
+                if (peek() == ':') read();
+                else {
                     recoverToNextObjectToken();
                     continue;
                 }
@@ -1177,9 +1139,7 @@ public class PlayState extends JPanel implements KeyListener {
             ensureLaneCount(lane + 1);
         } else {
             synchronized (laneLock) {
-                if (lane >= laneCount) {
-                    lane = Math.floorMod(lane, laneCount);
-                }
+                if (lane >= laneCount) lane = Math.floorMod(lane, laneCount);
             }
         }
 
@@ -1196,11 +1156,8 @@ public class PlayState extends JPanel implements KeyListener {
             }
 
             synchronized (laneLock) {
-                if (mustHit) {
-                    playerLanes[lane].add(time, (float) sustain);
-                } else {
-                    opponentLanes[lane].add(time, (float) sustain);
-                }
+                if (mustHit) playerLanes[lane].add(time, (float) sustain);
+                else opponentLanes[lane].add(time, (float) sustain);
             }
 
             bufferedNotes++;
@@ -1261,9 +1218,7 @@ public class PlayState extends JPanel implements KeyListener {
         int digitH = 72;
         int commaW = 26;
         int totalW = 0;
-        for (int i = 0; i < text.length(); i++) {
-            totalW += (text.charAt(i) == ',') ? commaW : digitW;
-        }
+        for (int i = 0; i < text.length(); i++) totalW += (text.charAt(i) == ',') ? commaW : digitW;
 
         int x = (SCREEN_W - totalW) / 2;
         int y = 290 - ((popupMaxFrames - popupFrames) * 2);
@@ -1275,9 +1230,7 @@ public class PlayState extends JPanel implements KeyListener {
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
             if (c == ',') {
-                if (numberComma != null) {
-                    g2.drawImage(numberComma, x, y + 18, commaW, digitH - 18, null);
-                }
+                if (numberComma != null) g2.drawImage(numberComma, x, y + 18, commaW, digitH - 18, null);
                 x += commaW;
             } else {
                 int idx = c - '0';
@@ -1303,10 +1256,7 @@ public class PlayState extends JPanel implements KeyListener {
 
     private void drawImageScaled(Graphics2D g2, BufferedImage img, double x, double y, double w, double h) {
         if (img == null || w <= 0 || h <= 0) return;
-        AffineTransform at = new AffineTransform();
-        at.translate(x, y);
-        at.scale(w / img.getWidth(), h / img.getHeight());
-        g2.drawImage(img, at, null);
+        g2.drawImage(img, (int) x, (int) y, (int) w, (int) h, null);
     }
 
     private void drawLaneNotes(Graphics2D g2, boolean isPlayer, double baseX, long songTime, double finalSpeed, Layout layout) {
@@ -1319,18 +1269,35 @@ public class PlayState extends JPanel implements KeyListener {
             count = laneCount;
         }
 
+        double minVisibleY = -MISS_DRAW_PADDING;
+        double maxVisibleY = SCREEN_H;
+        double minTime = songTime + ((minVisibleY - HIT_Y) / finalSpeed);
+        double maxTime = songTime + ((maxVisibleY - HIT_Y) / finalSpeed);
+
         for (int lane = 0; lane < count; lane++) {
             double x = baseX + (lane * layout.spacing);
             LaneStream stream = laneArr[lane];
-            int cursor = stream.hitCursor();
-            int size = stream.size();
 
-            for (int j = cursor; j < size; j++) {
-                double noteTime = stream.timeAt(j);
+            int start;
+            int end;
+            synchronized (stream) {
+                start = stream.visibleStart(minTime);
+                end = stream.upperBound(maxTime);
+            }
+
+            if (end <= start) continue;
+
+            int dir = dirs[lane];
+            BufferedImage noteImg = getComing(dir);
+
+            for (int j = start; j < end; j++) {
+                double noteTime;
+                synchronized (stream) {
+                    noteTime = stream.timeAt(j);
+                }
                 double y = HIT_Y + (noteTime - songTime) * finalSpeed;
-                if (y > SCREEN_H) break;
-                if (y > -MISS_DRAW_PADDING) {
-                    drawImageScaled(g2, getComing(dirs[lane]), x, y, layout.noteSize, layout.noteSize);
+                if (y > minVisibleY && y < maxVisibleY) {
+                    drawImageScaled(g2, noteImg, x, y, layout.noteSize, layout.noteSize);
                 }
             }
         }
@@ -1420,7 +1387,7 @@ public class PlayState extends JPanel implements KeyListener {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g;
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
 
         if (renderMode && offscreenImage != null) {
             synchronized (renderLock) {
@@ -1437,9 +1404,7 @@ public class PlayState extends JPanel implements KeyListener {
         int lane = laneFromKey(e.getKeyCode());
         if (lane >= 0) {
             synchronized (laneLock) {
-                if (lane < laneCount) {
-                    playerHeld[lane] = true;
-                }
+                if (lane < laneCount) playerHeld[lane] = true;
             }
             tryHit(lane);
             return;
@@ -1459,9 +1424,7 @@ public class PlayState extends JPanel implements KeyListener {
         int lane = laneFromKey(e.getKeyCode());
         if (lane >= 0) {
             synchronized (laneLock) {
-                if (lane < laneCount) {
-                    playerHeld[lane] = false;
-                }
+                if (lane < laneCount) playerHeld[lane] = false;
             }
         }
     }
@@ -1493,6 +1456,11 @@ public class PlayState extends JPanel implements KeyListener {
             upGlow = ImageIO.read(new File("Notes/UpGlow.png"));
             rightGlow = ImageIO.read(new File("Notes/RightGlow.png"));
 
+            staticImgs = new BufferedImage[]{leftArrow, downArrow, upArrow, rightArrow};
+            comingImgs = new BufferedImage[]{leftComing, downComing, upComing, rightComing};
+            pressImgs = new BufferedImage[]{leftPress, downPress, upPress, rightPress};
+            glowImgs = new BufferedImage[]{leftGlow, downGlow, upGlow, rightGlow};
+
             for (int i = 0; i < 10; i++) {
                 numberDigits[i] = ImageIO.read(new File("/home/andre/FNF-JAVA-ENGINE/Assets/Numbers/num" + i + ".png"));
             }
@@ -1504,38 +1472,18 @@ public class PlayState extends JPanel implements KeyListener {
     }
 
     private BufferedImage getStatic(int dir) {
-        return switch (Math.floorMod(dir, 4)) {
-            case 0 -> leftArrow;
-            case 1 -> downArrow;
-            case 2 -> upArrow;
-            default -> rightArrow;
-        };
+        return staticImgs[Math.floorMod(dir, 4)];
     }
 
     private BufferedImage getComing(int dir) {
-        return switch (Math.floorMod(dir, 4)) {
-            case 0 -> leftComing;
-            case 1 -> downComing;
-            case 2 -> upComing;
-            default -> rightComing;
-        };
+        return comingImgs[Math.floorMod(dir, 4)];
     }
 
     private BufferedImage getPress(int dir) {
-        return switch (Math.floorMod(dir, 4)) {
-            case 0 -> leftPress;
-            case 1 -> downPress;
-            case 2 -> upPress;
-            default -> rightPress;
-        };
+        return pressImgs[Math.floorMod(dir, 4)];
     }
 
     private BufferedImage getGlow(int dir) {
-        return switch (Math.floorMod(dir, 4)) {
-            case 0 -> leftGlow;
-            case 1 -> downGlow;
-            case 2 -> upGlow;
-            default -> rightGlow;
-        };
+        return glowImgs[Math.floorMod(dir, 4)];
     }
 }
