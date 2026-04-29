@@ -21,9 +21,6 @@ public class PlayState extends JPanel implements KeyListener {
     private static final int MISS_DRAW_PADDING = 120;
     private static final int HIT_Y = 100;
     private static final int FINAL_RENDER_PADDING_MS = 5000;
-
-    // For very large charts, keep the loaded note data, but do not keep drawing old notes.
-    // The renderer only touches notes in the current visible window.
     private static final int MAX_BUFFERED_NOTES = 1_000_000;
 
     private final JFrame frame;
@@ -125,8 +122,8 @@ public class PlayState extends JPanel implements KeyListener {
         private double[] times = new double[4096];
         private float[] sustains = new float[4096];
         private int size = 0;
-        private int head = 0;       // first live note
-        private int hitCursor = 0;  // next note to process
+        private int head = 0;
+        private int hitCursor = 0;
 
         synchronized void add(double time, float sustain) {
             if (size >= times.length) {
@@ -141,10 +138,6 @@ public class PlayState extends JPanel implements KeyListener {
 
         synchronized int size() {
             return size;
-        }
-
-        synchronized int liveStart() {
-            return head;
         }
 
         synchronized int hitCursor() {
@@ -528,6 +521,7 @@ public class PlayState extends JPanel implements KeyListener {
         }
 
         if (popupFrames > 0) popupFrames--;
+
         for (int i = 0; i < laneCount; i++) {
             if (playerGlow[i] > 0) playerGlow[i]--;
             if (opponentGlow[i] > 0) opponentGlow[i]--;
@@ -552,12 +546,21 @@ public class PlayState extends JPanel implements KeyListener {
         }
     }
 
+    private double densityScale() {
+        return Math.max(0.25, MainMenu.noteDensityMs);
+    }
+
     private void processOpponentNotes(long songTime) {
         synchronized (laneLock) {
             for (int lane = 0; lane < laneCount; lane++) {
                 LaneStream stream = opponentLanes[lane];
                 int cursor = stream.hitCursor();
                 int size = stream.size();
+
+                if (MainMenu.bulkSkipping) {
+                    int skipTo = stream.lowerBound(songTime - missWindowMs);
+                    if (skipTo > cursor) cursor = skipTo;
+                }
 
                 while (cursor < size) {
                     double noteTime = stream.timeAt(cursor);
@@ -583,6 +586,11 @@ public class PlayState extends JPanel implements KeyListener {
                 LaneStream stream = playerLanes[lane];
                 int cursor = stream.hitCursor();
                 int size = stream.size();
+
+                if (MainMenu.bulkSkipping) {
+                    int skipTo = stream.lowerBound(songTime - missWindowMs);
+                    if (skipTo > cursor) cursor = skipTo;
+                }
 
                 if (botPlay || renderMode) {
                     while (cursor < size) {
@@ -616,7 +624,8 @@ public class PlayState extends JPanel implements KeyListener {
     }
 
     private void cleanupOldNotes(long songTime) {
-        double minKeepTime = songTime - STREAM_KEEP_BEHIND_MS;
+        double density = densityScale();
+        double minKeepTime = songTime - (STREAM_KEEP_BEHIND_MS * density);
         long removedTotal = 0;
 
         synchronized (laneLock) {
@@ -649,6 +658,14 @@ public class PlayState extends JPanel implements KeyListener {
     }
 
     private void updateNpsCounters(long songTime) {
+        if (!MainMenu.showCounters) {
+            opponentCurrentNps = 0;
+            opponentMaxNps = 0;
+            playerCurrentNps = 0;
+            playerMaxNps = 0;
+            return;
+        }
+
         double windowStart = songTime - NPS_WINDOW_MS;
 
         int oNps = 0;
@@ -669,7 +686,7 @@ public class PlayState extends JPanel implements KeyListener {
     }
 
     private void triggerNumberPopup(long value) {
-        if (!MainMenu.numberPopups) return;
+        if (!MainMenu.numberPopups || MainMenu.disableComboPopups) return;
         comboPopupValue = value;
         popupFrames = popupMaxFrames;
     }
@@ -1143,6 +1160,19 @@ public class PlayState extends JPanel implements KeyListener {
             }
         }
 
+        if (MainMenu.removeOverlappedSystem) {
+            synchronized (laneLock) {
+                LaneStream target = mustHit ? playerLanes[lane] : opponentLanes[lane];
+                int sz = target.size();
+                if (sz > 0) {
+                    double prev = target.timeAt(sz - 1);
+                    if (Math.abs(prev - time) < 0.01) {
+                        return;
+                    }
+                }
+            }
+        }
+
         lastNoteTimeMs = Math.max(lastNoteTimeMs, (long) (time + sustain));
 
         synchronized (bufferLock) {
@@ -1203,15 +1233,19 @@ public class PlayState extends JPanel implements KeyListener {
 
     private void drawHud(Graphics2D g2) {
         float boxAlpha = renderMode ? 0.65f : 0.45f;
-        drawStatBox(g2, 20, 650, formatNpsText(opponentCurrentNps, opponentMaxNps), boxAlpha);
-        drawStatBoxRight(g2, SCREEN_W - 20, 650, formatNpsText(playerCurrentNps, playerMaxNps), boxAlpha);
+
+        if (MainMenu.showCounters) {
+            drawStatBox(g2, 20, 650, formatNpsText(opponentCurrentNps, opponentMaxNps), boxAlpha);
+            drawStatBoxRight(g2, SCREEN_W - 20, 650, formatNpsText(playerCurrentNps, playerMaxNps), boxAlpha);
+        }
+
         drawStatBox(g2, 20, 20, "FPS: " + fps, boxAlpha);
         drawStatBox(g2, 20, 60, "MEM: " + formatMemoryMB(usedMemoryMB) + " / " + formatMemoryGB(maxMemoryMB), boxAlpha);
         drawStatBox(g2, 20, 100, "SPEED: " + String.format(Locale.US, "%.2f", renderSpeed), boxAlpha);
     }
 
     private void drawNumberPopup(Graphics2D g2) {
-        if (!MainMenu.numberPopups || popupFrames <= 0) return;
+        if (!MainMenu.numberPopups || MainMenu.disableComboPopups || popupFrames <= 0) return;
         String text = MainMenu.commaOnThirdDigits ? formatNumber(comboPopupValue) : Long.toString(comboPopupValue);
 
         int digitW = 54;
@@ -1260,6 +1294,8 @@ public class PlayState extends JPanel implements KeyListener {
     }
 
     private void drawLaneNotes(Graphics2D g2, boolean isPlayer, double baseX, long songTime, double finalSpeed, Layout layout) {
+        if (!MainMenu.showNotes) return;
+
         LaneStream[] laneArr;
         int[] dirs;
         int count;
@@ -1269,10 +1305,13 @@ public class PlayState extends JPanel implements KeyListener {
             count = laneCount;
         }
 
+        double density = densityScale();
         double minVisibleY = -MISS_DRAW_PADDING;
         double maxVisibleY = SCREEN_H;
-        double minTime = songTime + ((minVisibleY - HIT_Y) / finalSpeed);
-        double maxTime = songTime + ((maxVisibleY - HIT_Y) / finalSpeed);
+        double minTime = songTime + (((minVisibleY - HIT_Y) / finalSpeed) * density);
+        double maxTime = songTime + (((maxVisibleY - HIT_Y) / finalSpeed) * density);
+
+        int drawn = 0;
 
         for (int lane = 0; lane < count; lane++) {
             double x = baseX + (lane * layout.spacing);
@@ -1291,13 +1330,17 @@ public class PlayState extends JPanel implements KeyListener {
             BufferedImage noteImg = getComing(dir);
 
             for (int j = start; j < end; j++) {
+                if (MainMenu.maxShownNotes > 0 && drawn >= MainMenu.maxShownNotes) return;
+
                 double noteTime;
                 synchronized (stream) {
                     noteTime = stream.timeAt(j);
                 }
-                double y = HIT_Y + (noteTime - songTime) * finalSpeed;
+
+                double y = HIT_Y + ((noteTime - songTime) * finalSpeed) / density;
                 if (y > minVisibleY && y < maxVisibleY) {
                     drawImageScaled(g2, noteImg, x, y, layout.noteSize, layout.noteSize);
+                    drawn++;
                 }
             }
         }
